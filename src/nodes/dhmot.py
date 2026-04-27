@@ -20,6 +20,7 @@ from typing import Dict, Any, Optional, List, Tuple
 from dataclasses import dataclass
 from pathlib import Path
 import json
+import cv2
 
 from ..core.node import LogicalKnowledgeNode, NodeOutput
 from ..core.schemas import (
@@ -29,7 +30,11 @@ from ..core.schemas import (
 )
 from ..core.constants import (
     EPSILON, TAU_DIMENSIONAL, WALKER_RESCAN_MARGIN,
-    NODE_CONFIG, VALIDATION_RULES, PIXELS_PER_MM
+    NODE_CONFIG, VALIDATION_RULES, PIXELS_PER_MM,
+    HOUGH_CIRCLE_PARAM1, HOUGH_CIRCLE_PARAM2,
+    HOUGH_CIRCLE_MIN_RADIUS, HOUGH_CIRCLE_MAX_RADIUS,
+    WALKER_PARAM2_REDUCTION,
+    CANNY_THRESHOLD_LOW, CANNY_THRESHOLD_HIGH
 )
 
 logger = logging.getLogger(__name__)
@@ -159,13 +164,15 @@ class DHMoTNode(LogicalKnowledgeNode):
 
     def execute(self, 
                 geometry: GeometryBRepSchema,
-                tables: List[TableSchema]) -> Any:
+                tables: List[TableSchema],
+                original_img_path: Optional[str] = None) -> Any:
         """Execute DHMoT agent on geometry and table data.
-        
+
         Args:
             geometry: B-Rep schema from Node 02
             tables: List of TableSchema from Node 03
-            
+            original_img_path: Optional path to original geometry mask for Walker re-scan
+
         Returns:
             NodeOutput with hyperedges, validations, and axioms
         """
@@ -191,7 +198,8 @@ class DHMoTNode(LogicalKnowledgeNode):
         harness_result = self._execute_with_harness(
             self._execute_dhmot,
             geometry,
-            tables
+            tables,
+            original_img_path
         )
 
         if harness_result["status"] == "failed":
@@ -399,86 +407,24 @@ class DHMoTNode(LogicalKnowledgeNode):
         # Generate visual evidence overlay before re-scan
         self._generate_validation_overlay(failed_validations, geometry, tables, original_img_path)
         
-        # Check for conflicts (>2% variance)
-        conflict_failures = [v for v in failed_validations if v.variance_pct > 2.0]
-        if conflict_failures:
-            self._output_conflict_exception(conflict_failures, geometry, tables)
-        
         revalidations = []
         
         for val in failed_validations:
             # Perform actual re-scan with adjusted OpenCV parameters
             # Use walker_rescan_margin to expand search window
             # Reduce Hough param2 by 30% for more sensitive detection
-            revalidated = self._perform_rescan(val, geometry, tables)
+            revalidated = self._perform_rescan(val, geometry, tables, original_img_path)
             revalidations.append(revalidated)
+        
+        # After re-scan, check for any remaining conflicts (>2% variance)
+        conflict_failures = [v for v in revalidations if v.variance_pct > 2.0]
+        if conflict_failures:
+            self._output_conflict_exception(conflict_failures, geometry, tables)
         
         return revalidations
 
-    def _perform_rescan(self, validation: ValidationResult,
-                       geometry: GeometryBRepSchema,
-                       tables: List[TableSchema]) -> ValidationResult:
-        """Perform actual re-scan with adjusted detection parameters.
-        
-        Uses expanded epsilon threshold and reduced Hough param2
-        for more sensitive geometric feature detection.
-        """
-        import random
-        
-        # Find the geometry and table cell for this validation
-        geom = None
-        for g in geometry.geometries:
-            if g.primitive_id == validation.geometry_id:
-                geom = g
-                break
-        
-        if not geom:
-            return validation
-        
-        # Expanded search: increase epsilon by walker_rescan_margin factor
-        expanded_epsilon = self.epsilon + self.walker_rescan_margin
-        
-        # Simulate improved detection with adjusted parameters
-        # In real implementation: re-run Hough/Canny with reduced param2
-        # param2_reduced = HOUGH_CIRCLE_PARAM2 * WALKER_PARAM2_REDUCTION
-        
-        # For simulation: 70% chance of healing with improved params
-        if random.random() > 0.3:
-            # Re-scan found matching geometry
-            # Use actual geometry size from B-Rep
-            new_geom_size = self._get_geometry_size(geom)
-            
-            # Recalculate variance with precise measurement
-            table_size = self._parse_size_string(validation.table_value)
-            
-            if table_size > 0 and new_geom_size > 0:
-                new_variance = abs(table_size - new_geom_size) / table_size * 100
-                within_tolerance = new_variance <= self.tau
-                
-                status = "PASS" if within_tolerance else "FAIL"
-                
-                return ValidationResult(
-                    hyperedge_id=validation.hyperedge_id,
-                    status=status,
-                    table_value=validation.table_value,
-                    geometry_value=new_geom_size,
-                    variance_pct=new_variance,
-                    within_tolerance=within_tolerance,
-                    details={
-                        "rescanned": True,
-                        "new_detection": True,
-                        "expanded_epsilon": expanded_epsilon,
-                        "original_epsilon": self.epsilon,
-                        "geometry_size": round(new_geom_size, 2),
-                        "table_size": table_size,
-                        "variance_pct": round(new_variance, 2),
-                        "units": "mm",
-                        "tolerance_threshold": self.tau
-                    }
-                )
-        
-        # Re-scan did not improve - keep original result
-        # but mark as re-scanned
+    def _make_rescanned_result(self, validation: ValidationResult) -> ValidationResult:
+        """Return validation marked as re-scanned with no new detection."""
         return ValidationResult(
             hyperedge_id=validation.hyperedge_id,
             status=validation.status,
@@ -490,7 +436,221 @@ class DHMoTNode(LogicalKnowledgeNode):
                 **validation.details,
                 "rescanned": True,
                 "new_detection": False,
-                "conflict": validation.variance_pct > self.tau
+            }
+        )
+
+    def _perform_rescan(self, validation: ValidationResult,
+                       geometry: GeometryBRepSchema,
+                       tables: List[TableSchema],
+                       original_img_path: Optional[str] = None) -> ValidationResult:
+        """Perform actual re-scan with adjusted detection parameters.
+
+        Uses expanded epsilon threshold and reduced Hough param2
+        for more sensitive geometric feature detection.
+        """
+        # Find the geometry and table cell for this validation
+        geom = None
+        for g in geometry.geometries:
+            if g.primitive_id == validation.geometry_id:
+                geom = g
+                break
+        
+        if not geom:
+            return validation
+        
+        # Locate the OCR table cell bbox and expand by walker_rescan_margin
+        expanded_epsilon = self.epsilon + self.walker_rescan_margin
+
+        # Extract info to locate the table cell from the validation's hyperedge
+        hyperedge_id = validation.hyperedge_id
+        parts = hyperedge_id.split("_")
+        if len(parts) < 3:
+            # Can't parse hyperedge ID, return original validation
+            return self._make_rescanned_result(validation)
+
+        # HEDGE_001_<table_id>: parse table_id after the second underscore
+        # table_id may contain underscores, so take everything after "HEDGE_<num>_"
+        table_id = "_".join(parts[2:])
+        row_index = -1
+        column = ""
+
+        # Find the matching table and cell to get bbox
+        target_cell = None
+        for table in tables:
+            if table.table_id != table_id:
+                continue
+            for row in table.rows:
+                # Try to find cell by matching geometry_id hint?
+                # Actually we need the column that matched this geometry.
+                # We stored that in hyperedge.column.
+                # But ValidationResult doesn't have it directly.
+                # We need to reconstruct from hyperedge.
+                pass
+
+        # Actually the hyperedge ID format is: HEDGE_<seq>_<table_id>
+        # The column is encoded in the geometry_id? No.
+        # The hyperedge was formed by matching geometry centroid to cell centroid.
+        # To find the cell, we need the row_index and column.
+        # Those were stored in HyperedgeBinding but not in ValidationResult.
+        #
+        # Since ValidationResult doesn't carry row/column, we need to derive
+        # the target cell from the geometry itself by re-linking.
+        #
+        # Strategy: find all cells within expanded_epsilon of the geometry's centroid.
+        # The originally linked cell should be within epsilon.
+        geom_centroid = geom.centroid
+        cell_candidates = []
+        for table in tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    cell_center_x = (cell.bbox[0] + cell.bbox[2]) / 2
+                    cell_center_y = (cell.bbox[1] + cell.bbox[3]) / 2
+                    distance = np.sqrt(
+                        (geom_centroid[0] - cell_center_x)**2 +
+                        (geom_centroid[1] - cell_center_y)**2
+                    )
+                    if distance <= self.epsilon:
+                        cell_candidates.append((cell, table, row))
+
+        if not cell_candidates:
+            return self._make_rescanned_result(validation)
+
+        # Take nearest candidate (there should be exactly one originally)
+        target_cell, target_table, target_row = min(cell_candidates, key=lambda x: x[0].bbox)
+
+        # Get cell bbox and expand by walker_rescan_margin
+        x1, y1, x2, y2 = target_cell.bbox
+        margin = self.walker_rescan_margin
+        crop_x1 = max(0, int(x1) - margin)
+        crop_y1 = max(0, int(y1) - margin)
+        crop_x2 = int(x2) + margin
+        crop_y2 = int(y2) + margin
+
+        # Need original image to crop
+        if not original_img_path:
+            return self._make_rescanned_result(validation)
+
+        img = cv2.imread(original_img_path, cv2.IMREAD_GRAYSCALE)
+        if img is None:
+            return self._make_rescanned_result(validation)
+
+        # Clamp crop to image bounds
+        h, w = img.shape
+        crop_x2 = min(crop_x2, w)
+        crop_y2 = min(crop_y2, h)
+
+        # Crop the region
+        crop = img[crop_y1:crop_y2, crop_x1:crop_x2]
+
+        if crop.size == 0:
+            return self._make_rescanned_result(validation)
+
+        # Run geometric extraction on the cropped mask with higher sensitivity
+        # Parameter adjustments:
+        # - HoughCircle param2 reduced by WALKER_PARAM2_REDUCTION (30%)
+        # - Canny thresholds reduced by 30% for finer edge detection
+        # - Contour approximation epsilon scaled down for more vertices
+        reduced_hough_param2 = int(HOUGH_CIRCLE_PARAM2 * WALKER_PARAM2_REDUCTION)
+        reduced_canny_low = int(CANNY_THRESHOLD_LOW * WALKER_PARAM2_REDUCTION)
+        reduced_canny_high = int(CANNY_THRESHOLD_HIGH * WALKER_PARAM2_REDUCTION)
+
+        blurred = cv2.GaussianBlur(crop, (9, 9), 2)
+
+        # Detect circles
+        circles = cv2.HoughCircles(
+            blurred, cv2.HOUGH_GRADIENT, 1, 20,
+            param1=HOUGH_CIRCLE_PARAM1, param2=reduced_hough_param2,
+            minRadius=HOUGH_CIRCLE_MIN_RADIUS, maxRadius=HOUGH_CIRCLE_MAX_RADIUS
+        )
+
+        # Detect lines
+        edges = cv2.Canny(crop, reduced_canny_low, reduced_canny_high)
+        lines = cv2.HoughLinesP(edges, 1, np.pi/180, 50, minLineLength=30, maxLineGap=10)
+
+        # Detect contours
+        contours, _ = cv2.findContours(crop, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        # Collect size measurements from all detected primitives
+        expected_size_mm = self._parse_size_string(validation.table_value)
+        if expected_size_mm <= 0:
+            return self._make_rescanned_result(validation)
+
+        candidates = []
+
+        # Process circles: diameter in mm
+        if circles is not None:
+            for c in np.uint16(np.around(circles))[0]:
+                r = c[2]
+                diameter_mm = (2 * r) / PIXELS_PER_MM
+                variance = abs(diameter_mm - expected_size_mm) / expected_size_mm * 100
+                candidates.append({
+                    "size_mm": diameter_mm,
+                    "variance": variance,
+                    "type": "circle"
+                })
+
+        # Process lines: length in mm
+        if lines is not None:
+            for line in lines.reshape(-1, 4):
+                x1, y1, x2, y2 = line
+                length_px = np.sqrt((x2-x1)**2 + (y2-y1)**2)
+                length_mm = length_px / PIXELS_PER_MM
+                variance = abs(length_mm - expected_size_mm) / expected_size_mm * 100
+                candidates.append({
+                    "size_mm": length_mm,
+                    "variance": variance,
+                    "type": "line"
+                })
+
+        # Process contours: bounding box max dimension
+        for contour in contours:
+            x, y, w, h = cv2.boundingRect(contour)
+            max_dim_px = max(w, h)
+            max_dim_mm = max_dim_px / PIXELS_PER_MM
+            variance = abs(max_dim_mm - expected_size_mm) / expected_size_mm * 100
+            candidates.append({
+                "size_mm": max_dim_mm,
+                "variance": variance,
+                "type": "contour"
+            })
+
+        if not candidates:
+            return self._make_rescanned_result(validation)
+
+        # Find best matching primitive
+        best_match = min(candidates, key=lambda c: c["variance"])
+
+        if best_match["variance"] <= self.tau:
+            # Successfully healed - within tolerance
+            new_geom_size = best_match["size_mm"]
+            new_variance = best_match["variance"]
+            status = "PASS"
+            within_tolerance = True
+        else:
+            # New detection doesn't match within tolerance
+            new_geom_size = self._get_geometry_size(geom)
+            new_variance = abs(new_geom_size - expected_size_mm) / expected_size_mm * 100
+            status = "FAIL"
+            within_tolerance = False
+
+        return ValidationResult(
+            hyperedge_id=validation.hyperedge_id,
+            status=status,
+            table_value=validation.table_value,
+            geometry_value=new_geom_size,
+            variance_pct=new_variance,
+            within_tolerance=within_tolerance,
+            details={
+                "rescanned": True,
+                "new_detection": True,
+                "expanded_epsilon": expanded_epsilon,
+                "original_epsilon": self.epsilon,
+                "walker_rescan_margin": self.walker_rescan_margin,
+                "geometry_size": round(new_geom_size, 2),
+                "table_size": expected_size_mm,
+                "variance_pct": round(new_variance, 2),
+                "units": "mm",
+                "tolerance_threshold": self.tau
             }
         )
 

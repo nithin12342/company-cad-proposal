@@ -119,7 +119,11 @@ class LKGPipeline:
             logger.info("\n[Stage 4/5] DHMoT Agent (Relational)")
             geometry: GeometryBRepSchema = stage2.data
             tables: list[TableSchema] = stage3.data
-            stage4 = self.node_04.execute(geometry, tables)
+            stage4 = self.node_04.execute(
+                geometry,
+                tables,
+                original_img_path=stage1.data.geometry_mask_path
+            )
             results["nodes"]["dhmot"] = self._format_node_result(stage4)
             if not stage4.success:
                 raise PipelineError("Node 04 failed", stage4.errors)
