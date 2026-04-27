@@ -24,12 +24,12 @@ try:
 except ImportError:
     pass
 
-from core.node import LogicalKnowledgeNode, NodeOutput
-from core.schemas import (
+from ..core.node import LogicalKnowledgeNode, NodeOutput
+from ..core.schemas import (
     BaseNodeContext, BaseNodeSpecification, BaseNodeIntention, NodeHarness,
     AxiomManifest, ComplianceReport
 )
-from core.constants import (
+from ..core.constants import (
     INDIAN_STANDARDS, LLM_MODEL_LLAMA, LLM_MODEL_CLAUDE,
     NODE_CONFIG, LLM_MODEL_GEMINI
 )

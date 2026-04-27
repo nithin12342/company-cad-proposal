@@ -22,13 +22,13 @@ from pathlib import Path
 import json
 import cv2
 
-from core.node import LogicalKnowledgeNode, NodeOutput
-from core.schemas import (
+from ..core.node import LogicalKnowledgeNode, NodeOutput
+from ..core.schemas import (
     BaseNodeContext, BaseNodeSpecification, BaseNodeIntention, NodeHarness,
     GeometryBRepSchema, GeometryPrimitive, TableSchema, HyperedgeBinding, 
     ValidationResult, AxiomManifest
 )
-from core.constants import (
+from ..core.constants import (
     EPSILON, TAU_DIMENSIONAL, WALKER_RESCAN_MARGIN,
     NODE_CONFIG, VALIDATION_RULES, PIXELS_PER_MM,
     HOUGH_CIRCLE_PARAM1, HOUGH_CIRCLE_PARAM2,

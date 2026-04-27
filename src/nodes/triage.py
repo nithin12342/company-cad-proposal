@@ -13,12 +13,12 @@ from typing import Dict, Any, Optional, Tuple, List
 from dataclasses import dataclass
 from pathlib import Path
 
-from core.node import LogicalKnowledgeNode, NodeOutput
-from core.schemas import (
+from ..core.node import LogicalKnowledgeNode, NodeOutput
+from ..core.schemas import (
     BaseNodeContext, BaseNodeSpecification, BaseNodeIntention, NodeHarness
 )
-from core.constants import DPI_STANDARD, NODE_CONFIG
-from utils.downloader import ModelDownloader
+from ..core.constants import DPI_STANDARD, NODE_CONFIG
+from ..utils.downloader import ModelDownloader
 
 logger = logging.getLogger(__name__)
 
