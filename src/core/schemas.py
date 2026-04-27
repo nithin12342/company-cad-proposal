@@ -155,7 +155,8 @@ class GeometryPrimitive:
         required = ["primitive_id", "type", "coordinates", "centroid"]
         if not all(k in geom for k in required):
             return False
-        if geom["type"] not in ["rectangle", "circle", "line", "arc", "polyline"]:
+        if geom["type"] not in ["rectangle", "circle", "line", "arc", "polyline",
+                                "triangle", "pentagon", "hexagon", "polygon"]:
             return False
         return True
 
