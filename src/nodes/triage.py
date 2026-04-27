@@ -13,12 +13,12 @@ from typing import Dict, Any, Optional, Tuple, List
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..core.node import LogicalKnowledgeNode, NodeOutput
-from ..core.schemas import (
+from core.node import LogicalKnowledgeNode, NodeOutput
+from core.schemas import (
     BaseNodeContext, BaseNodeSpecification, BaseNodeIntention, NodeHarness
 )
-from ..core.constants import DPI_STANDARD, NODE_CONFIG
-from ..utils.downloader import ModelDownloader
+from core.constants import DPI_STANDARD, NODE_CONFIG
+from utils.downloader import ModelDownloader
 
 logger = logging.getLogger(__name__)
 
@@ -311,6 +311,9 @@ class PixelTriageNode(LogicalKnowledgeNode):
         )
         for mask, score in zip(masks, scores):
             mask_np = mask.cpu().numpy()
+            # Remove singleton dimensions if present
+            if mask_np.ndim > 2:
+                mask_np = mask_np.squeeze()
             if score > 0.5:
                 all_masks.append((mask_np, score.item()))
         

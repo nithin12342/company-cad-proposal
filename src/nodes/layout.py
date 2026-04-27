@@ -10,12 +10,12 @@ from typing import Dict, Any, Optional, List, Tuple
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..core.node import LogicalKnowledgeNode, NodeOutput
-from ..core.schemas import (
+from core.node import LogicalKnowledgeNode, NodeOutput
+from core.schemas import (
     BaseNodeContext, BaseNodeSpecification, BaseNodeIntention, NodeHarness,
     TableSchema, TableRow, TableCell
 )
-from ..core.constants import DPI_STANDARD, NODE_CONFIG
+from core.constants import DPI_STANDARD, NODE_CONFIG
 
 logger = logging.getLogger(__name__)
 

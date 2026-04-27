@@ -13,12 +13,12 @@ from pathlib import Path
 
 import cv2
 
-from ..core.node import LogicalKnowledgeNode, NodeOutput
-from ..core.schemas import (
+from core.node import LogicalKnowledgeNode, NodeOutput
+from core.schemas import (
     BaseNodeContext, BaseNodeSpecification, BaseNodeIntention, NodeHarness,
     GeometryBRepSchema, GeometryPrimitive
 )
-from ..core.constants import DPI_STANDARD, PIXELS_PER_MM, NODE_CONFIG
+from core.constants import DPI_STANDARD, PIXELS_PER_MM, NODE_CONFIG
 
 logger = logging.getLogger(__name__)
 
