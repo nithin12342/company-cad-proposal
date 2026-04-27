@@ -90,6 +90,7 @@ WALKER_PARAM2_REDUCTION = 0.7  # 30% reduction
 # LLM models
 LLM_MODEL_CLAUDE = "claude-3-5-sonnet-20241022"
 LLM_MODEL_LLAMA = "llama-3-70b"
+LLM_MODEL_GEMINI = "gemini-1.5-flash"
 
 # Temperature for compliance reasoning
 LLM_TEMPERATURE = 0.0  # Deterministic, no creativity
