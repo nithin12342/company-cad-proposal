@@ -132,7 +132,7 @@ dhmot = DHMoTNode(
     apply_psi=True
 )
 
-result = dhmot.execute(geometry, [table])
+result, _ = dhmot.execute(geometry, [table])
 
 print(f"Hyperedges: {len(result.data['hyperedges'])}")
 print(f"Validations: {len(result.data['validations'])}")
