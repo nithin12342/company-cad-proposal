@@ -102,7 +102,7 @@ class LayoutExtractionNode(LogicalKnowledgeNode):
         )
 
     def execute(self, table_mask_path: str, text_mask_path: str,
-                page_number: int = 1) -> Any:
+                page_number: int = 1, original_file_path: str = None) -> Any:
         logger.info(f"Extracting layout from page {page_number}")
 
         valid, errors = self.validate_input({
@@ -120,7 +120,7 @@ class LayoutExtractionNode(LogicalKnowledgeNode):
             )
 
         result = self._execute_with_harness(
-            self._extract_tables, table_mask_path, text_mask_path, page_number
+            self._extract_tables, table_mask_path, text_mask_path, page_number, original_file_path
         )
 
         if result["status"] == "failed":
@@ -144,34 +144,92 @@ class LayoutExtractionNode(LogicalKnowledgeNode):
         )
 
     def _extract_tables(self, table_mask_path: str, text_mask_path: str,
-                        page_number: int) -> List[TableSchema]:
-        """Extract tables using OCR on mask regions."""
-        table_img = self._load_mask(table_mask_path)
-        text_img = self._load_mask(text_mask_path)
-
-        # Detect table regions
-        table_regions = self._detect_table_regions(table_img)
-
+                        page_number: int, original_file_path: str = None) -> List[TableSchema]:
+        """Extract tables using DocTR natively on the original file."""
+        import cv2
+        from doctr.io import DocumentFile
+        
         tables = []
+        table_img = self._load_mask(table_mask_path)
+        h_mask, w_mask = table_img.shape[:2]
+        
+        # 1. Run DocTR natively on the original high-res file
+        if original_file_path and DOCTR_AVAILABLE and self.ocr_predictor:
+            logger.info("Running DocTR natively on original source...")
+            try:
+                if original_file_path.lower().endswith('.pdf'):
+                    doc = DocumentFile.from_pdf(original_file_path)
+                else:
+                    doc = DocumentFile.from_images(original_file_path)
+                
+                result = self.ocr_predictor(doc)
+                page = result.pages[0]
+                
+                # Convert DocTR relative coordinates to absolute mask scale
+                all_cells = []
+                for block in page.blocks:
+                    for line in block.lines:
+                        for word in line.words:
+                            (xmin, ymin), (xmax, ymax) = word.geometry
+                            abs_x1, abs_y1 = int(xmin * w_mask), int(ymin * h_mask)
+                            abs_x2, abs_y2 = int(xmax * w_mask), int(ymax * h_mask)
+                            
+                            all_cells.append(TableCell(
+                                column="Unknown",
+                                text=word.value,
+                                bbox=[float(abs_x1), float(abs_y1), float(abs_x2), float(abs_y2)],
+                                confidence=word.confidence
+                            ))
+            except Exception as e:
+                logger.error(f"DocTR native processing failed: {e}")
+                all_cells = []
+        else:
+            all_cells = []
+
+        # 2. Group cells by Grid Table Regions
+        table_regions = self._detect_table_regions(table_img)
+        used_cells = set()
+        
         for idx, region in enumerate(table_regions):
-            # Extract region from text mask
-            region_text = self._extract_text_from_region(text_img, region)
-
-            # OCR the region with real DocTR
-            cells = self._ocr_region_docTR(region_text, region, page_number, idx)
-
-            if cells:
-                rows = self._group_into_rows(cells)
+            rx1, ry1, rx2, ry2 = region
+            region_cells = []
+            
+            for i, cell in enumerate(all_cells):
+                cx1, cy1, cx2, cy2 = cell.bbox
+                cx, cy = (cx1 + cx2) / 2, (cy1 + cy2) / 2
+                if rx1 <= cx <= rx2 and ry1 <= cy <= ry2:
+                    region_cells.append(cell)
+                    used_cells.add(i)
+            
+            if region_cells:
+                rows = self._group_into_rows(region_cells)
                 table = TableSchema(
                     table_id=f"TBL_{page_number:02d}_{idx:02d}",
                     page_number=page_number,
-                    bounding_box=[region[0], region[1], region[2], region[3]],
+                    bounding_box=[float(rx1), float(ry1), float(rx2), float(ry2)],
                     headers=self._detect_headers(rows),
                     rows=rows
                 )
                 tables.append(table)
+                
+        # 3. Create Virtual Table for Floating CAD Tags
+        floating_cells = [cell for i, cell in enumerate(all_cells) if i not in used_cells]
+        if floating_cells:
+            floating_rows = []
+            for i, cell in enumerate(floating_cells):
+                cell.column = "Tag"
+                floating_rows.append(TableRow(row_index=i, cells=[cell]))
+                
+            tag_table = TableSchema(
+                table_id=f"TBL_{page_number:02d}_FLOATING_TAGS",
+                page_number=page_number,
+                bounding_box=[0.0, 0.0, float(w_mask), float(h_mask)],
+                headers=["Floating Tags"],
+                rows=floating_rows
+            )
+            tables.append(tag_table)
 
-        logger.info(f"Extracted {len(tables)} tables")
+        logger.info(f"Extracted {len(tables)} tables (including virtual floating tags)")
         return tables
 
     def _load_mask(self, path: str) -> np.ndarray:

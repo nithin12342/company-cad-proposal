@@ -109,7 +109,8 @@ class LKGPipeline:
             stage3 = self.node_03.execute(
                 stage1.data.table_mask_path,
                 stage1.data.text_mask_path,
-                page_number=1
+                page_number=1,
+                original_file_path=input_pdf
             )
             results["nodes"]["layout"] = self._format_node_result(stage3)
             if not stage3.success:
