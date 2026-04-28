@@ -65,7 +65,7 @@ def test_brep_mathematical_validity():
         
         # Create node and extract
         node = GeometricExtractionNode("test_node_02")
-        result = node.execute(mask_path, page_number=1)
+        result, _ = node.execute(mask_path, page_number=1)
         
         import os
         os.unlink(mask_path)
@@ -165,7 +165,7 @@ def test_oracle_api_structure():
         )
         
         # Evaluate (will use deterministic rule eval, not actual LLM)
-        result = oracle.execute(axioms, document_id="test_drawing")
+        result, _ = oracle.execute(axioms, document_id="test_drawing")
         
         if not result.success:
             print(f"✗ Oracle execution failed: {result.errors}")
@@ -257,7 +257,7 @@ def test_simulation_flag_false():
         # Test Triage node
         print("  Testing Node 01 (Pixel Triage)...")
         triage_node = PixelTriageNode("test_triage_01")
-        triage_result = triage_node.execute(img_path, output_dir="./test_masks")
+        triage_result, _ = triage_node.execute(img_path, output_dir="./test_masks")
         assert triage_result.success, f"Triage failed: {triage_result.errors}"
         
         # Check metadata for simulation flag
@@ -278,7 +278,7 @@ def test_simulation_flag_false():
         import os
         geom_mask_path = "./test_masks/geometry_mask.png"
         if os.path.exists(geom_mask_path):
-            vec_result = vectorize_node.execute(geom_mask_path, page_number=1)
+            vec_result, _ = vectorize_node.execute(geom_mask_path, page_number=1)
             assert vec_result.success, f"Vectorize failed: {vec_result.errors}"
             
             # Vectorize uses deterministic OpenCV algorithms - verify no simulation
@@ -323,7 +323,7 @@ def test_simulation_flag_false():
             ]
         )
         
-        dhmot_result = dhmot_node.execute(test_geom, [test_table])
+        dhmot_result, _ = dhmot_node.execute(test_geom, [test_table])
         assert dhmot_result.success, f"DHMoT failed: {dhmot_result.errors}"
         
         # Verify deterministic constraint
