@@ -97,8 +97,23 @@ def main():
     print(f"LLM:    {args.llm.upper()}")
     print("="*60)
 
+    from .nodes.triage import PixelTriageNode
+    from .nodes.vectorize import GeometricExtractionNode
+    from .nodes.layout import LayoutExtractionNode
+    from .nodes.dhmot import DHMoTNode
+    from .nodes.oracle import ComplianceOracleNode
+
+    # Initialize nodes
+    nodes = {
+        "triage": PixelTriageNode(node_id="node_01_triage", **config.get("triage", {})),
+        "vectorize": GeometricExtractionNode(node_id="node_02_vectorize", **config.get("vectorize", {})),
+        "layout": LayoutExtractionNode(node_id="node_03_layout", **config.get("layout", {})),
+        "dhmot": DHMoTNode(node_id="node_04_dhmot", **config.get("dhmot", {})),
+        "oracle": ComplianceOracleNode(node_id="node_05_oracle", **config.get("oracle", {}))
+    }
+
     # Run pipeline
-    pipeline = LKGPipeline(config=config)
+    pipeline = LKGPipeline(nodes=nodes)
     results = pipeline.execute_full_pipeline(str(input_path))
 
     # Save results

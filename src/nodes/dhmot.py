@@ -22,14 +22,14 @@ from pathlib import Path
 import json
 import cv2
 
-from ..core.node import LogicalKnowledgeNode, NodeOutput
+from ..core.node import LogicalKnowledgeNode, NodeOutput, PipelineJournal, PipelineDataLossError
 from ..core.schemas import (
     BaseNodeContext, BaseNodeSpecification, BaseNodeIntention, NodeHarness,
     GeometryBRepSchema, GeometryPrimitive, TableSchema, HyperedgeBinding, 
     ValidationResult, AxiomManifest
 )
 from ..core.constants import (
-    EPSILON, TAU_DIMENSIONAL, WALKER_RESCAN_MARGIN,
+    DISTANCE_THRESHOLD_GLOBAL, TOLERANCE_THRESHOLD, WALKER_RESCAN_MARGIN,
     NODE_CONFIG, VALIDATION_RULES, PIXELS_PER_MM,
     HOUGH_CIRCLE_PARAM1, HOUGH_CIRCLE_PARAM2,
     HOUGH_CIRCLE_MIN_RADIUS, HOUGH_CIRCLE_MAX_RADIUS,
@@ -72,8 +72,8 @@ class DHMoTNode(LogicalKnowledgeNode):
             node_id: Unique identifier (e.g., "node_04_dhmot")
             **kwargs: Additional configuration
         """
-        self.epsilon = kwargs.get("epsilon", EPSILON)
-        self.tau = kwargs.get("tau", TAU_DIMENSIONAL)
+        self.epsilon = kwargs.get("epsilon", DISTANCE_THRESHOLD_GLOBAL)
+        self.tau = kwargs.get("tau", TOLERANCE_THRESHOLD)
         self.walker_rescan_margin = kwargs.get(
             "walker_rescan_margin", WALKER_RESCAN_MARGIN
         )
@@ -165,7 +165,7 @@ class DHMoTNode(LogicalKnowledgeNode):
     def execute(self, 
                 geometry: GeometryBRepSchema,
                 tables: List[TableSchema],
-                original_img_path: Optional[str] = None) -> Any:
+                original_img_path: Optional[str] = None) -> tuple[NodeOutput, PipelineJournal]:
         """Execute DHMoT agent on geometry and table data.
 
         Args:
@@ -184,7 +184,7 @@ class DHMoTNode(LogicalKnowledgeNode):
         errors = geom_errors + table_errors
         
         if not (valid_geom and valid_tables):
-            return NodeOutput(
+            out = NodeOutput(
                 success=False,
                 data=None,
                 context=self.context.to_dict(),
@@ -193,6 +193,7 @@ class DHMoTNode(LogicalKnowledgeNode):
                 harness=self.harness.to_dict(),
                 errors=errors
             )
+            return out, PipelineJournal(node_name=self.node_id, input_summary="Geom & Tables", output_summary="FAILED", warnings=errors)
 
         # Execute with harness guarantees
         harness_result = self._execute_with_harness(
@@ -203,7 +204,7 @@ class DHMoTNode(LogicalKnowledgeNode):
         )
 
         if harness_result["status"] == "failed":
-            return NodeOutput(
+            out = NodeOutput(
                 success=False,
                 data=None,
                 context=self.context.to_dict(),
@@ -212,10 +213,14 @@ class DHMoTNode(LogicalKnowledgeNode):
                 harness=self.harness.to_dict(),
                 errors=harness_result["errors"]
             )
+            return out, PipelineJournal(node_name=self.node_id, input_summary="Geom & Tables", output_summary="FAILED", warnings=harness_result["errors"])
 
         result = harness_result.get("output")
+        
+        if len(result["hyperedges"]) == 0:
+            raise PipelineDataLossError("0 hyperedges formed between geometry and tables", self.node_id)
 
-        return NodeOutput(
+        out = NodeOutput(
             success=True,
             data=result,
             context=self.context.to_dict(),
@@ -231,6 +236,13 @@ class DHMoTNode(LogicalKnowledgeNode):
                 "execution_trace": harness_result.get("execution_trace", [])
             }
         )
+        journal = PipelineJournal(
+            node_name=self.node_id,
+            input_summary=f"Geom: {geometry.total_count}, Tables: {len(tables)}",
+            output_summary=f"Hyperedges: {len(result['hyperedges'])}, Validations: {len(result['validations'])}, Axioms: {len(result['axioms'])}",
+            warnings=[]
+        )
+        return out, journal
 
     def _execute_dhmot(self, 
                        geometry: GeometryBRepSchema,

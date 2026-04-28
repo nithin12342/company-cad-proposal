@@ -15,8 +15,22 @@ from .schemas import (
     BaseNodeIntention, NodeHarness
 )
 from .constants import VALIDATION_RULES, ERROR_CODES
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
+
+class PipelineJournal(BaseModel):
+    """Audit trail for node execution."""
+    node_name: str
+    input_summary: str
+    output_summary: str
+    warnings: List[str] = Field(default_factory=list)
+
+class PipelineDataLossError(Exception):
+    """Raised when a node produces zero data (Fail-Fast policy)."""
+    def __init__(self, message: str, node_name: str):
+        super().__init__(f"DataLoss in {node_name}: {message}")
+        self.node_name = node_name
 
 
 @dataclass
@@ -103,11 +117,11 @@ class LogicalKnowledgeNode(ABC):
         pass
 
     @abstractmethod
-    def execute(self, *args, **kwargs) -> NodeOutput:
+    def execute(self, *args, **kwargs) -> tuple['NodeOutput', PipelineJournal]:
         """Execute node logic with error-free guarantee.
         
         Returns:
-            NodeOutput with execution results and metadata
+            Tuple of (NodeOutput, PipelineJournal)
         """
         pass
 

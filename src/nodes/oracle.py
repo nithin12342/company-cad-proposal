@@ -27,7 +27,7 @@ try:
 except ImportError:
     pass
 
-from ..core.node import LogicalKnowledgeNode, NodeOutput
+from ..core.node import LogicalKnowledgeNode, NodeOutput, PipelineJournal, PipelineDataLossError
 from ..core.schemas import (
     BaseNodeContext, BaseNodeSpecification, BaseNodeIntention, NodeHarness,
     AxiomManifest, ComplianceReport
@@ -110,16 +110,28 @@ class ComplianceOracleNode(LogicalKnowledgeNode):
             error_handling="recoverable"
         )
 
-    def execute(self, axioms: List[AxiomManifest], document_id: str) -> Any:
+    def execute(self, axioms: List[AxiomManifest], document_id: str) -> tuple[NodeOutput, PipelineJournal]:
         logger.info(f"Evaluating compliance (model={self.model}, gemini_available={self.use_gemini})")
 
         if not self.use_gemini:
             logger.warning("Gemini API not available, falling back to rule-based evaluation")
-            return self._evaluate_compliance_rule_based(axioms, document_id)
+            report = self._evaluate_compliance_rule_based(axioms, document_id)
+            if report.report_summary["total_checks"] == 0:
+                raise PipelineDataLossError("0 compliance checks performed (rule-based fallback)", self.node_id)
+            out = NodeOutput(
+                success=True, data=report,
+                context=self.context.to_dict(),
+                specification=self.specification.to_dict(),
+                intention=self.intention.to_dict(),
+                harness=self.harness.to_dict(),
+                metadata={"model": "rule-based-fallback", "axiom_count": len(axioms)}
+            )
+            journal = PipelineJournal(node_name=self.node_id, input_summary=f"Axioms: {len(axioms)}", output_summary=f"Checks: {report.report_summary['total_checks']}", warnings=[])
+            return out, journal
 
         valid, errors = self.validate_input(axioms)
         if not valid:
-            return NodeOutput(
+            out = NodeOutput(
                 success=False, data=None,
                 context=self.context.to_dict(),
                 specification=self.specification.to_dict(),
@@ -127,6 +139,7 @@ class ComplianceOracleNode(LogicalKnowledgeNode):
                 harness=self.harness.to_dict(),
                 errors=errors
             )
+            return out, PipelineJournal(node_name=self.node_id, input_summary=f"Axioms: {len(axioms)}", output_summary="FAILED", warnings=errors)
 
         result = self._execute_with_harness(
             self._evaluate_compliance_gemini, axioms, document_id
@@ -134,17 +147,26 @@ class ComplianceOracleNode(LogicalKnowledgeNode):
 
         if result["status"] == "failed":
             logger.warning("Gemini evaluation failed, falling back to rule-based")
-            return NodeOutput(
-                success=True, data=self._evaluate_compliance_rule_based(axioms, document_id),
+            report = self._evaluate_compliance_rule_based(axioms, document_id)
+            if report.report_summary["total_checks"] == 0:
+                raise PipelineDataLossError("0 compliance checks performed (rule-based fallback)", self.node_id)
+            out = NodeOutput(
+                success=True, data=report,
                 context=self.context.to_dict(),
                 specification=self.specification.to_dict(),
                 intention=self.intention.to_dict(),
                 harness=self.harness.to_dict(),
                 metadata={"model": "rule-based-fallback", "axiom_count": len(axioms)}
             )
+            journal = PipelineJournal(node_name=self.node_id, input_summary=f"Axioms: {len(axioms)}", output_summary=f"Checks: {report.report_summary['total_checks']}", warnings=result["errors"])
+            return out, journal
 
         report = result["output"]
-        return NodeOutput(
+        
+        if report.report_summary["total_checks"] == 0:
+            raise PipelineDataLossError("0 compliance checks performed by Gemini", self.node_id)
+            
+        out = NodeOutput(
             success=True, data=report,
             context=self.context.to_dict(),
             specification=self.specification.to_dict(),
@@ -156,6 +178,8 @@ class ComplianceOracleNode(LogicalKnowledgeNode):
                 "report_id": report.report_id
             }
         )
+        journal = PipelineJournal(node_name=self.node_id, input_summary=f"Axioms: {len(axioms)}", output_summary=f"Checks: {report.report_summary['total_checks']}", warnings=[])
+        return out, journal
 
     def _evaluate_compliance_gemini(self, axioms: List[AxiomManifest],
                                    document_id: str) -> ComplianceReport:

@@ -18,7 +18,7 @@ try:
 except ImportError:
     PDF2IMAGE_AVAILABLE = False
 
-from ..core.node import LogicalKnowledgeNode, NodeOutput
+from ..core.node import LogicalKnowledgeNode, NodeOutput, PipelineJournal, PipelineDataLossError
 from ..core.schemas import (
     BaseNodeContext, BaseNodeSpecification, BaseNodeIntention, NodeHarness
 )
@@ -142,12 +142,12 @@ class PixelTriageNode(LogicalKnowledgeNode):
             error_handling="strict"
         )
 
-    def execute(self, input_path: str, output_dir: Optional[str] = None) -> Any:
+    def execute(self, input_path: str, output_dir: Optional[str] = None) -> tuple[NodeOutput, PipelineJournal]:
         logger.info(f"Triage: {input_path}")
 
         valid, errors = self.validate_input(input_path)
         if not valid:
-            return NodeOutput(
+            out = NodeOutput(
                 success=False, data=None,
                 context=self.context.to_dict(),
                 specification=self.specification.to_dict(),
@@ -155,6 +155,7 @@ class PixelTriageNode(LogicalKnowledgeNode):
                 harness=self.harness.to_dict(),
                 errors=errors
             )
+            return out, PipelineJournal(node_name=self.node_id, input_summary=input_path, output_summary="FAILED", warnings=errors)
 
         input_file = Path(input_path)
         if not input_file.exists():
@@ -168,7 +169,7 @@ class PixelTriageNode(LogicalKnowledgeNode):
         )
 
         if result["status"] == "failed":
-            return NodeOutput(
+            out = NodeOutput(
                 success=False, data=None,
                 context=self.context.to_dict(),
                 specification=self.specification.to_dict(),
@@ -176,9 +177,14 @@ class PixelTriageNode(LogicalKnowledgeNode):
                 harness=self.harness.to_dict(),
                 errors=result["errors"]
             )
+            return out, PipelineJournal(node_name=self.node_id, input_summary=input_path, output_summary="FAILED", warnings=result["errors"])
 
         output = result["output"]
-        return NodeOutput(
+        
+        if output.num_geometry_masks == 0 and output.num_text_masks == 0 and output.num_table_masks == 0:
+            raise PipelineDataLossError("0 semantic masks generated (geometry, text, table) from image", self.node_id)
+            
+        out = NodeOutput(
             success=True, data=output,
             context=self.context.to_dict(),
             specification=self.specification.to_dict(),
@@ -192,6 +198,13 @@ class PixelTriageNode(LogicalKnowledgeNode):
                 "device": str(self.device) if self.device else "cpu"
             }
         )
+        journal = PipelineJournal(
+            node_name=self.node_id,
+            input_summary=f"Image: {input_path}",
+            output_summary=f"Geometry: {output.num_geometry_masks}, Text: {output.num_text_masks}, Table: {output.num_table_masks}",
+            warnings=[]
+        )
+        return out, journal
 
     def _segment_page(self, input_path: str, output_dir: Path) -> TriageOutput:
         """Segment page into geometry, text, table masks using SAM."""

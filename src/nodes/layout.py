@@ -10,12 +10,12 @@ from typing import Dict, Any, Optional, List, Tuple
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..core.node import LogicalKnowledgeNode, NodeOutput
+from ..core.node import LogicalKnowledgeNode, NodeOutput, PipelineJournal, PipelineDataLossError
 from ..core.schemas import (
     BaseNodeContext, BaseNodeSpecification, BaseNodeIntention, NodeHarness,
     TableSchema, TableRow, TableCell
 )
-from ..core.constants import DPI_STANDARD, NODE_CONFIG
+from ..core.constants import DPI_STANDARD, NODE_CONFIG, GlobalCoordinateSync
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +102,7 @@ class LayoutExtractionNode(LogicalKnowledgeNode):
         )
 
     def execute(self, table_mask_path: str, text_mask_path: str,
-                page_number: int = 1, original_file_path: str = None) -> Any:
+                page_number: int = 1, original_file_path: str = None) -> tuple[NodeOutput, PipelineJournal]:
         logger.info(f"Extracting layout from page {page_number}")
 
         valid, errors = self.validate_input({
@@ -110,7 +110,7 @@ class LayoutExtractionNode(LogicalKnowledgeNode):
             "text_mask": text_mask_path
         })
         if not valid:
-            return NodeOutput(
+            out = NodeOutput(
                 success=False, data=None,
                 context=self.context.to_dict(),
                 specification=self.specification.to_dict(),
@@ -118,13 +118,14 @@ class LayoutExtractionNode(LogicalKnowledgeNode):
                 harness=self.harness.to_dict(),
                 errors=errors
             )
+            return out, PipelineJournal(node_name=self.node_id, input_summary=table_mask_path, output_summary="FAILED", warnings=errors)
 
         result = self._execute_with_harness(
             self._extract_tables, table_mask_path, text_mask_path, page_number, original_file_path
         )
 
         if result["status"] == "failed":
-            return NodeOutput(
+            out = NodeOutput(
                 success=False, data=None,
                 context=self.context.to_dict(),
                 specification=self.specification.to_dict(),
@@ -132,9 +133,14 @@ class LayoutExtractionNode(LogicalKnowledgeNode):
                 harness=self.harness.to_dict(),
                 errors=result["errors"]
             )
+            return out, PipelineJournal(node_name=self.node_id, input_summary=table_mask_path, output_summary="FAILED", warnings=result["errors"])
 
         tables = result["output"]
-        return NodeOutput(
+        
+        if len(tables) == 0:
+            raise PipelineDataLossError("0 tables extracted from document", self.node_id)
+            
+        out = NodeOutput(
             success=True, data=tables,
             context=self.context.to_dict(),
             specification=self.specification.to_dict(),
@@ -142,6 +148,13 @@ class LayoutExtractionNode(LogicalKnowledgeNode):
             harness=self.harness.to_dict(),
             metadata={"table_count": len(tables)}
         )
+        journal = PipelineJournal(
+            node_name=self.node_id,
+            input_summary=table_mask_path,
+            output_summary=f"Extracted {len(tables)} tables",
+            warnings=[]
+        )
+        return out, journal
 
     def _extract_tables(self, table_mask_path: str, text_mask_path: str,
                         page_number: int, original_file_path: str = None) -> List[TableSchema]:
@@ -165,19 +178,16 @@ class LayoutExtractionNode(LogicalKnowledgeNode):
                 result = self.ocr_predictor(doc)
                 page = result.pages[0]
                 
-                # Convert DocTR relative coordinates to absolute mask scale
+                # DocTR provides relative coordinates 0.0-1.0
                 all_cells = []
                 for block in page.blocks:
                     for line in block.lines:
                         for word in line.words:
                             (xmin, ymin), (xmax, ymax) = word.geometry
-                            abs_x1, abs_y1 = int(xmin * w_mask), int(ymin * h_mask)
-                            abs_x2, abs_y2 = int(xmax * w_mask), int(ymax * h_mask)
-                            
                             all_cells.append(TableCell(
                                 column="Unknown",
                                 text=word.value,
-                                bbox=[float(abs_x1), float(abs_y1), float(abs_x2), float(abs_y2)],
+                                bbox=[float(xmin), float(ymin), float(xmax), float(ymax)],
                                 confidence=word.confidence
                             ))
             except Exception as e:
@@ -191,7 +201,10 @@ class LayoutExtractionNode(LogicalKnowledgeNode):
         used_cells = set()
         
         for idx, region in enumerate(table_regions):
-            rx1, ry1, rx2, ry2 = region
+            rx1_px, ry1_px, rx2_px, ry2_px = region
+            rx1, ry1 = GlobalCoordinateSync.to_global(rx1_px, ry1_px, w_mask, h_mask)
+            rx2, ry2 = GlobalCoordinateSync.to_global(rx2_px, ry2_px, w_mask, h_mask)
+            
             region_cells = []
             
             for i, cell in enumerate(all_cells):
@@ -223,7 +236,7 @@ class LayoutExtractionNode(LogicalKnowledgeNode):
             tag_table = TableSchema(
                 table_id=f"TBL_{page_number:02d}_FLOATING_TAGS",
                 page_number=page_number,
-                bounding_box=[0.0, 0.0, float(w_mask), float(h_mask)],
+                bounding_box=[0.0, 0.0, 1.0, 1.0],
                 headers=["Floating Tags"],
                 rows=floating_rows
             )
@@ -251,190 +264,6 @@ class LayoutExtractionNode(LogicalKnowledgeNode):
                 regions.append((x, y, x+w, y+h))
         return regions
 
-    def _extract_text_from_region(self, mask: np.ndarray,
-                                  region: Tuple[int, int, int, int]) -> np.ndarray:
-        """Extract text region from mask."""
-        x1, y1, x2, y2 = region
-        h, w = mask.shape
-        x1, x2 = max(0, x1), min(w, x2)
-        y1, y2 = max(0, y1), min(h, y2)
-        return mask[y1:y2, x1:x2]
-
-    def _ocr_region_docTR(self, region_img: np.ndarray,
-                          region: Tuple[int, int, int, int],
-                          page: int, region_idx: int) -> List[TableCell]:
-        """Perform OCR on region using python-doctr OCR predictor.
-        
-        Uses the pretrained DocTR recognition model for accurate text extraction
-        from architectural drawings and schedules.
-        """
-        import cv2
-        import numpy as np
-        from doctr import models
-        from doctr.io import DocumentFile
-
-        cells = []
-
-        # Convert grayscale to RGB for DocTR
-        if len(region_img.shape) == 2:
-            region_rgb = cv2.cvtColor(region_img, cv2.COLOR_GRAY2RGB)
-        else:
-            region_rgb = region_img
-
-        # Detect text contours to identify cell boundaries
-        _, binary = cv2.threshold(region_img, 127, 255, cv2.THRESH_BINARY)
-        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        for contour in contours:
-            x, y, w, h = cv2.boundingRect(contour)
-            if w < 8 or h < 8:  # Skip very small regions
-                continue
-
-            # Extract cell image
-            cell_img = region_rgb[y:y+h, x:x+w]
-            if cell_img.size == 0:
-                continue
-
-            # Perform OCR using DocTR
-            try:
-                text = self._ocr_cell_docTR(cell_img)
-            except Exception as e:
-                logger.debug(f"DocTR OCR failed for cell: {e}")
-                text = ""
-
-            # If OCR returns empty, try contour-based fallback
-            if not text or text.strip() == "":
-                # Check if it's likely a header or data cell based on geometry
-                if w > h * 1.5 and w > 40:  # Wide region - likely header
-                    text = self._infer_header_from_shape(cell_img)
-                elif w < 30 and h < 30:  # Very small - skip
-                    continue
-                else:
-                    # Try to extract any visible text using contour analysis
-                    text = self._extract_text_from_contours(cell_img)
-
-            # Skip empty cells
-            if not text or text.strip() == "":
-                continue
-
-            # Clean up extracted text
-            text = text.strip()
-
-            cells.append(TableCell(
-                column="Unknown",
-                text=text,
-                bbox=[float(region[0] + x), float(region[1] + y),
-                      float(region[0] + x + w), float(region[1] + y + h)],
-                confidence=0.85  # DocTR provides good confidence
-            ))
-
-        return cells
-
-    def _ocr_cell_docTR(self, cell_img: np.ndarray) -> str:
-        """Use DocTR recognition model to extract text from cell image.
-        
-        Args:
-            cell_img: RGB image of the cell region
-            
-        Returns:
-            Extracted text string
-        """
-        try:
-            # Use the pretrained recognition model
-            if self.ocr_predictor is None:
-                return ""
-
-            # DocTR expects PIL Image or DocumentFile
-            from PIL import Image
-            pil_img = Image.fromarray(cell_img)
-
-            # Get prediction
-            result = self.ocr_predictor([pil_img])
-
-            # Extract text from result
-            if result and len(result) > 0:
-                page_result = result[0]
-                if page_result and hasattr(page_result, 'blocks'):
-                    text_lines = []
-                    for block in page_result.blocks:
-                        if hasattr(block, 'lines'):
-                            for line in block.lines:
-                                if hasattr(line, 'words'):
-                                    for word in line.words:
-                                        if hasattr(word, 'value'):
-                                            text_lines.append(word.value)
-                    return ' '.join(text_lines)
-
-            return ""
-        except Exception as e:
-            logger.debug(f"DocTR recognition error: {e}")
-            return ""
-
-    def _infer_header_from_shape(self, cell_img: np.ndarray) -> str:
-        """Infer header text from cell shape and content when OCR fails."""
-        import cv2
-        import numpy as np
-
-        # Check for underline (common in headers)
-        edges = cv2.Canny(cell_img, 50, 150)
-        lines = cv2.HoughLinesP(edges, 1, np.pi/180, 10, minLineLength=cell_img.shape[1]//2, maxLineGap=5)
-
-        h, w = cell_img.shape[:2]
-        if lines is not None and len(lines) > 0:
-            # Check if line is near bottom (underline pattern)
-            for line in lines.reshape(-1, 4):
-                if abs(line[3] - h) < 5:  # Line near bottom
-                    return "Header"
-
-        # Check text density
-        gray = cv2.cvtColor(cell_img, cv2.COLOR_RGB2GRAY) if len(cell_img.shape) == 3 else cell_img
-        _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
-        density = np.mean(binary > 127) / 255.0
-
-        if density > 0.3:
-            return "Mark"
-        elif density > 0.15:
-            return "Size"
-        else:
-            return "Reinforcement"
-
-    def _extract_text_from_contours(self, cell_img: np.ndarray) -> str:
-        """Extract text indicators from contour analysis.
-        
-        Used as fallback when DocTR is not available or fails.
-        """
-        import cv2
-        import numpy as np
-
-        if len(cell_img.shape) == 3:
-            gray = cv2.cvtColor(cell_img, cv2.COLOR_RGB2GRAY)
-        else:
-            gray = cell_img
-
-        _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
-        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        if not contours:
-            return ""
-
-        # Filter for text-sized contours
-        text_contours = [c for c in contours if 10 < cv2.contourArea(c) < 500]
-
-        if not text_contours:
-            return ""
-
-        # Estimate based on contour count and arrangement
-        if len(text_contours) == 1:
-            area = cv2.contourArea(text_contours[0])
-            if area > 100:
-                return "Text"
-            else:
-                return "T"
-        elif len(text_contours) > 1 and len(text_contours) < 5:
-            return "Code"
-        else:
-            return "Data"
-
     def _group_into_rows(self, cells: List[TableCell]) -> List[TableRow]:
         """Group cells into rows based on y-coordinate."""
         if not cells:
@@ -446,58 +275,8 @@ class LayoutExtractionNode(LogicalKnowledgeNode):
         rows = []
         current_row = []
         current_y = None
-        tolerance = 20
-
-        for cell in sorted_cells:
-            cell_y = cell.bbox[1]
-            if current_y is None or abs(cell_y - current_y) > tolerance:
-                if current_row:
-                    rows.append(TableRow(row_index=len(rows), cells=current_row))
-                current_row = [cell]
-                current_y = cell_y
-            else:
-                current_row.append(cell)
-
-        if current_row:
-            rows.append(TableRow(row_index=len(rows), cells=current_row))
-
-        # Assign columns
-        for row in rows:
-            sorted_cells = sorted(row.cells, key=lambda c: c.bbox[0])
-            for i, cell in enumerate(sorted_cells):
-                cell.column = ["Mark", "Size", "Reinforcement", "Unknown"][min(i, 3)]
-
-        return rows
-
-    def _detect_headers(self, rows: List[TableRow]) -> List[str]:
-        """Detect column headers from first row."""
-        if not rows:
-            return []
-        first_row = rows[0]
-        headers = []
-        for cell in first_row.cells:
-            if "Mark" in cell.text or "mark" in cell.text.lower():
-                headers.append("Mark")
-            elif "Size" in cell.text or "size" in cell.text.lower():
-                headers.append("Size")
-            elif "Reinf" in cell.text or "reinf" in cell.text.lower():
-                headers.append("Reinforcement")
-            else:
-                headers.append(cell.text[:20])
-        return headers
-
-    def _group_into_rows(self, cells: List[TableCell]) -> List[TableRow]:
-        """Group cells into rows based on y-coordinate."""
-        if not cells:
-            return []
-
-        # Sort by y position
-        sorted_cells = sorted(cells, key=lambda c: c.bbox[1])
-
-        rows = []
-        current_row = []
-        current_y = None
-        tolerance = 20
+        # Adjust tolerance to global scale (e.g. 20 pixels / 1000 pixels = 0.02)
+        tolerance = 0.02
 
         for cell in sorted_cells:
             cell_y = cell.bbox[1]

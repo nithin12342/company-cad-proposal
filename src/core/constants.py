@@ -13,9 +13,26 @@ DPI_STANDARD = 150
 DPI_SUPPORTED = [150, 200, 300, 600]
 PIXELS_PER_MM = 5.9055  # At 150 DPI
 
+class GlobalCoordinateSync:
+    """Utility to enforce 0.0-1.0 coordinate scaling to prevent geometric drift."""
+    
+    @staticmethod
+    def to_global(x: float, y: float, w_px: int, h_px: int) -> tuple[float, float]:
+        """Convert pixel coordinates to global 0.0-1.0 scale."""
+        return (x / max(1, w_px), y / max(1, h_px))
+        
+    @staticmethod
+    def to_local(gx: float, gy: float, w_px: int, h_px: int) -> tuple[float, float]:
+        """Convert global 0.0-1.0 scale to pixel coordinates."""
+        return (gx * w_px, gy * h_px)
+
 # Spatial linking threshold (epsilon - ε)
-# Maximum distance (pixels) between geometry centroid and text bbox for binding
-DISTANCE_THRESHOLD_PX = 50.0
+# Maximum distance (global 0.0-1.0 scale) between geometry centroid and text bbox for binding
+DISTANCE_THRESHOLD_GLOBAL = 0.05
+
+# Tolerance threshold (tau - τ)
+# Allowed variance between documented values and geometry properties
+TOLERANCE_THRESHOLD = 0.1  # 10%
 
 # Walker re-scan bounding box expansion (pixels)
 WALKER_RESCAN_MARGIN = 200
@@ -37,7 +54,7 @@ ocr_confidence_min = 0.7
 # ============================================================================
 # Epsilon (ε) - Distance Threshold
 # ============================================================================
-EPSILON = DISTANCE_THRESHOLD_PX  # 50 pixels at 300 DPI
+EPSILON = DISTANCE_THRESHOLD_GLOBAL  # 0.05 global scale
 
 # ============================================================================
 # Tau (τ) - Engineering Tolerance
