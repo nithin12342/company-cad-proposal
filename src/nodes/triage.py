@@ -203,7 +203,7 @@ class PixelTriageNode(LogicalKnowledgeNode):
             if not PDF2IMAGE_AVAILABLE:
                 raise ImportError("pdf2image is required for PDF processing. Install with: pip install pdf2image")
             # Convert PDF to image
-            pages = convert_from_path(input_path, dpi=300)
+            pages = convert_from_path(input_path, dpi=DPI_STANDARD)
             if not pages:
                 raise ValueError(f"No pages found in PDF: {input_path}")
             # Take first page and convert PIL Image to numpy array
@@ -216,6 +216,15 @@ class PixelTriageNode(LogicalKnowledgeNode):
                 raise ValueError(f"Failed to load or convert {input_path}")
 
         h, w = img.shape[:2]
+
+        # Dynamic OOM scaling: cap max dimension at 2048 to prevent memory errors
+        MAX_DIM = 2048
+        if max(h, w) > MAX_DIM:
+            scale = MAX_DIM / max(h, w)
+            new_w = int(w * scale)
+            new_h = int(h * scale)
+            img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+            h, w = new_h, new_w
 
         # Use SAM for semantic segmentation
         geometry_mask, text_mask, table_mask = self._sam_segment(img)

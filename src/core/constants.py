@@ -9,9 +9,9 @@ to ensure consistency across all nodes.
 # ============================================================================
 
 # DPI settings for pixel-to-real-world conversion
-DPI_STANDARD = 300
+DPI_STANDARD = 150
 DPI_SUPPORTED = [150, 200, 300, 600]
-PIXELS_PER_MM = 11.811  # At 300 DPI
+PIXELS_PER_MM = 5.9055  # At 150 DPI
 
 # Spatial linking threshold (epsilon - ε)
 # Maximum distance (pixels) between geometry centroid and text bbox for binding
