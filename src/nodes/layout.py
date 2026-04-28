@@ -49,7 +49,7 @@ class LayoutExtractionNode(LogicalKnowledgeNode):
     def _setup_model(self):
         """Initialize OCR model."""
         logger.info("Loading python-doctr model...")
-        self.ocr_predictor = models.recognition.zpredictor(pretrained=True)
+        self.ocr_predictor = models.ocr_predictor(pretrained=True)
         logger.info("OCR model ready")
 
     def _build_context(self) -> BaseNodeContext:
