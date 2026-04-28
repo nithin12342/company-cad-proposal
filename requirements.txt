@@ -12,6 +12,9 @@ opencv-python-headless>=4.8.0
 # OCR (DocTR)
 python-doctr>=0.3.0
 
+# PDF processing
+pdf2image>=1.16.0
+
 # Google Gemini API
 google-generativeai>=0.3.0
 
@@ -24,3 +27,7 @@ Pillow>=10.0.0
 
 # Development/testing
 pytest>=7.4.0
+
+# System Dependencies (comment):
+# - poppler-utils (required for pdf2image)
+#   On Ubuntu/Debian: apt-get install -y poppler-utils

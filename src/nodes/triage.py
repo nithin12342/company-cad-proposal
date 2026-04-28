@@ -12,6 +12,11 @@ import logging
 from typing import Dict, Any, Optional, Tuple, List
 from dataclasses import dataclass
 from pathlib import Path
+try:
+    from pdf2image import convert_from_path
+    PDF2IMAGE_AVAILABLE = True
+except ImportError:
+    PDF2IMAGE_AVAILABLE = False
 
 from ..core.node import LogicalKnowledgeNode, NodeOutput
 from ..core.schemas import (
@@ -193,19 +198,24 @@ class PixelTriageNode(LogicalKnowledgeNode):
         import time
         start = time.time()
 
-        # Load image
-        img = cv2.imread(input_path)
-        if img is None:
-            # Create synthetic CAD-like image for testing
-            h, w = 3508, 2480
-            img = np.ones((h, w, 3), dtype=np.uint8) * 255
-            cv2.rectangle(img, (100, 100), (500, 400), (0, 0, 0), 3)
-            cv2.circle(img, (800, 600), 100, (0, 0, 0), 3)
-            cv2.putText(img, "C1", (520, 250), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 0), 3)
-            cv2.rectangle(img, (1000, 500), (1800, 1000), (0, 0, 0), 3)
-            cv2.putText(img, "400x400", (1020, 550), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 0), 3)
+        # Load image with PDF support
+        if input_path.lower().endswith('.pdf'):
+            if not PDF2IMAGE_AVAILABLE:
+                raise ImportError("pdf2image is required for PDF processing. Install with: pip install pdf2image")
+            # Convert PDF to image
+            pages = convert_from_path(input_path, dpi=300)
+            if not pages:
+                raise ValueError(f"No pages found in PDF: {input_path}")
+            # Take first page and convert PIL Image to numpy array
+            pil_image = pages[0]
+            img = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
         else:
-            h, w = img.shape[:2]
+            # Standard image loading
+            img = cv2.imread(input_path)
+            if img is None:
+                raise ValueError(f"Failed to load or convert {input_path}")
+
+        h, w = img.shape[:2]
 
         # Use SAM for semantic segmentation
         geometry_mask, text_mask, table_mask = self._sam_segment(img)
