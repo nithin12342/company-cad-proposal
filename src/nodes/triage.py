@@ -216,7 +216,10 @@ class PixelTriageNode(LogicalKnowledgeNode):
             if not PDF2IMAGE_AVAILABLE:
                 raise ImportError("pdf2image is required for PDF processing. Install with: pip install pdf2image")
             # Convert PDF to image
-            pages = convert_from_path(input_path, dpi=DPI_STANDARD)
+            try:
+                pages = convert_from_path(input_path, dpi=DPI_STANDARD)
+            except Exception as e:
+                raise RuntimeError(f"FATAL: PDF Conversion failed. Is poppler installed? {e}")
             if not pages:
                 raise ValueError(f"No pages found in PDF: {input_path}")
             # Take first page and convert PIL Image to numpy array
@@ -226,7 +229,7 @@ class PixelTriageNode(LogicalKnowledgeNode):
             # Standard image loading
             img = cv2.imread(input_path)
             if img is None:
-                raise ValueError(f"Failed to load or convert {input_path}")
+                raise FileNotFoundError(f"FATAL: Source file could not be read at {input_path}")
 
         orig_h, orig_w = img.shape[:2]
         h, w = orig_h, orig_w

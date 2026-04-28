@@ -191,10 +191,12 @@ class LayoutExtractionNode(LogicalKnowledgeNode):
                                 confidence=word.confidence
                             ))
             except Exception as e:
-                logger.error(f"DocTR native processing failed: {e}")
-                all_cells = []
+                raise RuntimeError(f"FATAL: DocTR processing crashed: {e}")
         else:
             all_cells = []
+
+        if not all_cells:
+            raise ValueError("FATAL: OCR found ZERO text on the document. The text array is empty.")
 
         # 2. Group cells by Grid Table Regions
         table_regions = self._detect_table_regions(table_img)

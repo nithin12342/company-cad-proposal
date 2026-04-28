@@ -178,6 +178,9 @@ class DHMoTNode(LogicalKnowledgeNode):
         """
         logger.info("Executing DHMoT Agent")
 
+        if not geometry: raise ValueError("FATAL [DHMoT]: Node 02 (Vectorize) returned an empty geometry list. Halting pipeline.")
+        if not tables: raise ValueError("FATAL [DHMoT]: Node 03 (Layout) returned an empty tables list. Halting pipeline.")
+
         # Validate inputs
         valid_geom, geom_errors = self.validate_input(geometry)
         valid_tables, table_errors = self.validate_input(tables)
