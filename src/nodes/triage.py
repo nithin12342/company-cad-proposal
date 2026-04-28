@@ -215,7 +215,8 @@ class PixelTriageNode(LogicalKnowledgeNode):
             if img is None:
                 raise ValueError(f"Failed to load or convert {input_path}")
 
-        h, w = img.shape[:2]
+        orig_h, orig_w = img.shape[:2]
+        h, w = orig_h, orig_w
 
         # Dynamic OOM scaling: cap max dimension at 2048 to prevent memory errors
         MAX_DIM = 2048
@@ -239,6 +240,11 @@ class PixelTriageNode(LogicalKnowledgeNode):
         text_mask = cv2.bitwise_and(text_mask, cv2.bitwise_not(geometry_mask))
         text_mask = cv2.bitwise_and(text_mask, cv2.bitwise_not(table_mask))
 
+        if (h, w) != (orig_h, orig_w):
+            geometry_mask = cv2.resize(geometry_mask, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
+            text_mask = cv2.resize(text_mask, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
+            table_mask = cv2.resize(table_mask, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
+
         # Save
         paths = {}
         densities = {}
@@ -261,7 +267,7 @@ class PixelTriageNode(LogicalKnowledgeNode):
             geometry_mask_path=paths["geometry_mask_path"],
             text_mask_path=paths["text_mask_path"],
             table_mask_path=paths["table_mask_path"],
-            page_dimensions=(h, w),
+            page_dimensions=(orig_h, orig_w),
             mask_densities=densities,
             processing_time_ms=elapsed,
             num_geometry_masks=n_geom,
