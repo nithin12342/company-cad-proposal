@@ -13,10 +13,13 @@ from datetime import datetime
 from pathlib import Path
 
 try:
-    import google.generativeai as genai
+    import google.genai as genai
     GEMINI_AVAILABLE = True
 except ImportError:
     GEMINI_AVAILABLE = False
+
+# Initialize client
+client = None
 
 try:
     from dotenv import load_dotenv
@@ -162,7 +165,8 @@ class ComplianceOracleNode(LogicalKnowledgeNode):
         for accurate regulatory compliance checking.
         """
         # Configure Gemini
-        genai.configure(api_key=self.api_key)
+        global client
+        client = genai.Client(api_key=self.api_key)
         
         # Build RAG context with specific code clauses
         is456_clauses = self._build_is456_rag_context()
@@ -235,15 +239,14 @@ Comment must explain pass/fail with measured values.
 """
         
         # Generate with Gemini
-        model = genai.GenerativeModel(
-            model_name="gemini-1.5-flash",
-            generation_config={
-                "temperature": 0.0,  # Deterministic
-                "max_output_tokens": 2000,
-            }
+        response = client.models.generate_content(
+            model="gemini-1.5-flash",
+            contents=prompt,
+            config=genai.GenerateContentConfig(
+                temperature=0.0,  # Deterministic
+                max_output_tokens=2000,
+            )
         )
-        
-        response = model.generate_content(prompt)
         
         # Parse JSON response
         try:
