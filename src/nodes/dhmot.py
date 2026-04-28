@@ -377,6 +377,7 @@ class DHMoTNode(LogicalKnowledgeNode):
                 status = "FAIL"
             
             details = {
+                "geometry_id": hedge.geometry_id,
                 "geometry_size": round(geom_size, 2),
                 "table_size": table_size,
                 "units": "mm",
@@ -466,7 +467,7 @@ class DHMoTNode(LogicalKnowledgeNode):
         # Find the geometry and table cell for this validation
         geom = None
         for g in geometry.geometries:
-            if g.primitive_id == validation.geometry_id:
+            if g.primitive_id == validation.details.get("geometry_id"):
                 geom = g
                 break
         
@@ -730,7 +731,7 @@ class DHMoTNode(LogicalKnowledgeNode):
                 
                 # Add variance label if available
                 for val in validations:
-                    if val.geometry_id == geom.primitive_id:
+                    if val.details.get("geometry_id") == geom.primitive_id:
                         label = f"{val.variance_pct:.1f}%"
                         cv2.putText(overlay, label, (x1, y1-5),
                                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, val_color, 1)
@@ -810,7 +811,7 @@ class DHMoTNode(LogicalKnowledgeNode):
         for val in conflicts:
             conflict_entry = {
                 "hyperedge_id": val.hyperedge_id,
-                "geometry_id": val.geometry_id,
+                "geometry_id": val.details.get("geometry_id"),
                 "variance_pct": val.variance_pct,
                 "geometry_value": val.geometry_value,
                 "table_value": val.table_value,
