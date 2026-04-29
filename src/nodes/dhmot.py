@@ -873,10 +873,29 @@ class DHMoTNode(LogicalKnowledgeNode):
                 # Re-raise to propagate conflict exception
                 raise
 
-        logger.info("Phase 4: Applying Psi operator")
+        logger.info("Phase 4: Applying Spatial Grounding (Dual-Table Schema)")
         axioms = []
-        if self.apply_psi:
-            axioms = self._apply_psi(validations, geometry, tables)
+        for geom in geometry.geometries:
+            coords = geom.coordinates
+            x1 = coords.get("x1", 0)
+            y1 = coords.get("y1", 0)
+            x2 = coords.get("x2", 0)
+            y2 = coords.get("y2", 0)
+            width = abs(x2 - x1)
+            height = abs(y2 - y1)
+            
+            # Using formulas exactly as requested by user
+            axioms.append({
+                "axiom_id": geom.primitive_id,
+                "spatial_context": {
+                    "bounding_box": [x1, y1, x2, y2],
+                    "equations": {
+                        "area": f"{width * height}px",
+                        "aspect_ratio": f"{round(width/height, 2) if height > 0 else 0}",
+                        "perimeter": f"{2 * (width + height)}px"
+                    }
+                }
+            })
 
         logger.info(f"DHMoT complete: {len(hyperedges)} hyperedges, "
                     f"{len(validations)} validations, {len(axioms)} axioms")
@@ -884,7 +903,7 @@ class DHMoTNode(LogicalKnowledgeNode):
         return {
             "hyperedges": [h.to_dict() for h in hyperedges],
             "validations": [v.to_dict() for v in validations],
-            "axioms": [a.to_dict() for a in axioms]
+            "axioms": axioms
         }
 
     def _apply_psi(self,
