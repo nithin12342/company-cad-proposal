@@ -304,9 +304,17 @@ class DHMoTNode(LogicalKnowledgeNode):
         hyperedges = []
         edge_counter = 0
         
+        # Task 5: Semantic Filtering
+        stop_words = {"of", "with", "the", "sheet-1", "details:", "annex"}
+        
         for table in tables:
             for row in table.rows:
                 for cell in row.cells:
+                    # Filter out garbage text
+                    text_clean = cell.text.strip().lower()
+                    if not text_clean or text_clean in stop_words or len(text_clean) < 2:
+                        continue
+                        
                     # Cell bbox center as reference point
                     cell_center_x = (cell.bbox[0] + cell.bbox[2]) / 2
                     cell_center_y = (cell.bbox[1] + cell.bbox[3]) / 2
@@ -873,7 +881,33 @@ class DHMoTNode(LogicalKnowledgeNode):
                 # Re-raise to propagate conflict exception
                 raise
 
-        logger.info("Phase 4: Applying Spatial Grounding (Dual-Table Schema)")
+        logger.info("Phase 4: Applying Spatial Grounding and Topological Graph Fixes")
+        
+        # Task 4: Topological Graph Fix
+        hedge_map = {h.hyperedge_id: h for h in hyperedges}
+        target_hyperedges = []
+        for val in validations:
+            h_obj = hedge_map.get(val.hyperedge_id)
+            if not h_obj:
+                continue
+                
+            target_hyperedges.append({
+                "hyperedge_id": val.hyperedge_id,
+                "source_id": h_obj.table_id,
+                "target_id": val.details.get("geometry_id", "Unknown"),
+                "relation_type": "SPATIAL_PROXIMITY",
+                "is_compliant": val.within_tolerance,
+                "evaluation_metrics": {
+                    "distance": h_obj.distance,
+                    "variance_pct": val.variance_pct if val.variance_pct > 0 else None
+                },
+                "details": {
+                    "table_value": val.table_value,
+                    "row_index": h_obj.row_index,
+                    "column": h_obj.column
+                }
+            })
+
         axioms = []
         for geom in geometry.geometries:
             coords = geom.coordinates
@@ -881,29 +915,50 @@ class DHMoTNode(LogicalKnowledgeNode):
             y1 = coords.get("y1", 0)
             x2 = coords.get("x2", 0)
             y2 = coords.get("y2", 0)
-            width = abs(x2 - x1)
-            height = abs(y2 - y1)
             
-            # Using formulas exactly as requested by user
+            # Task 2: Mathematical Calibration
+            # Truncate normalized coordinates to exactly 4 decimal places
+            nx1 = round(x1 / 1275, 4)
+            ny1 = round(y1 / 1650, 4)
+            nx2 = round(x2 / 1275, 4)
+            ny2 = round(y2 / 1650, 4)
+            
+            # Retrieve true pixel dimensions for equations
+            w_px = (nx2 - nx1) * 1275
+            h_px = (ny2 - ny1) * 1650
+            
+            area_px = round(w_px * h_px, 1)
+            aspect_ratio = round(w_px / h_px, 2) if h_px > 0 else 0.0
+            perimeter_px = round(2 * (w_px + h_px), 1)
+            
+            # Task 3: Axiom Enhancements
             axioms.append({
                 "axiom_id": geom.primitive_id,
+                "ai_confidence": 0.95,
+                "is_legend_item": False,
                 "spatial_context": {
-                    "bounding_box": [x1, y1, x2, y2],
+                    "bounding_box": [nx1, ny1, nx2, ny2],
                     "equations": {
-                        "area": f"{width * height}px",
-                        "aspect_ratio": f"{round(width/height, 2) if height > 0 else 0}",
-                        "perimeter": f"{2 * (width + height)}px"
+                        "area_px": area_px,
+                        "aspect_ratio": aspect_ratio,
+                        "perimeter_px": perimeter_px
                     }
                 }
             })
 
-        logger.info(f"DHMoT complete: {len(hyperedges)} hyperedges, "
-                    f"{len(validations)} validations, {len(axioms)} axioms")
+        logger.info(f"DHMoT complete: {len(target_hyperedges)} hyperedges, {len(axioms)} axioms")
 
+        # Task 1: Root Metadata and Units
         return {
-            "hyperedges": [h.to_dict() for h in hyperedges],
-            "validations": [v.to_dict() for v in validations],
-            "axioms": axioms
+            "metadata": {
+                "version": "3.2.0",
+                "dpi": 150,
+                "page_dimensions_px": [1275, 1650],
+                "coordinate_system": "normalized_0_to_1",
+                "base_unit": "mm"
+            },
+            "axioms": axioms,
+            "hyperedges": target_hyperedges
         }
 
     def _apply_psi(self,
