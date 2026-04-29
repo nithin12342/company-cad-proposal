@@ -180,9 +180,15 @@ class LayoutExtractionNode(LogicalKnowledgeNode):
                 
                 # DocTR provides relative coordinates 0.0-1.0
                 all_cells = []
+                stop_words = {"of", "the", "and", "with", "plan", "annex", "sheet-1", "details:", "building", "layout"}
+                
                 for block in page.blocks:
                     for line in block.lines:
                         for word in line.words:
+                            text_lower = word.value.strip().lower()
+                            if text_lower in stop_words:
+                                continue # Drop this text, do not create a validation/hyperedge for it
+                                
                             (xmin, ymin), (xmax, ymax) = word.geometry
                             all_cells.append(TableCell(
                                 column="Unknown",
