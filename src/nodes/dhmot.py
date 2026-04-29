@@ -232,7 +232,6 @@ class DHMoTNode(LogicalKnowledgeNode):
             harness=self.harness.to_dict(),
             metadata={
                 "hyperedge_count": len(result["hyperedges"]),
-                "validation_count": len(result["validations"]),
                 "axiom_count": len(result["axioms"]),
                 "epsilon": self.epsilon,
                 "tau": self.tau,
@@ -242,7 +241,7 @@ class DHMoTNode(LogicalKnowledgeNode):
         journal = PipelineJournal(
             node_name=self.node_id,
             input_summary=f"Geom: {geometry.total_count}, Tables: {len(tables)}",
-            output_summary=f"Hyperedges: {len(result['hyperedges'])}, Validations: {len(result['validations'])}, Axioms: {len(result['axioms'])}",
+            output_summary=f"Hyperedges: {len(result['hyperedges'])}, Axioms: {len(result['axioms'])}",
             warnings=[]
         )
         return out, journal
