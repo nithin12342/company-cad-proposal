@@ -303,15 +303,27 @@ class DHMoTNode(LogicalKnowledgeNode):
         hyperedges = []
         edge_counter = 0
         
-        # Task 5: Semantic Filtering
-        stop_words = {"of", "with", "the", "sheet-1", "details:", "annex"}
+        import re
+        # Task 1: Semantic Filtering Sieve
+        stop_words = {"of", "the", "and", "with", "plan", "annex", "sheet-1", "details:", "building", "layout"}
         
         for table in tables:
             for row in table.rows:
                 for cell in row.cells:
                     # Filter out garbage text
-                    text_clean = cell.text.strip().lower()
-                    if not text_clean or text_clean in stop_words or len(text_clean) < 2:
+                    text = cell.text.strip()
+                    text_lower = text.lower()
+                    
+                    if not text_lower or text_lower in stop_words:
+                        continue
+                        
+                    # Regex gate for valid engineering tags
+                    is_column_or_wall = re.match(r'^[CW]\d+$', text, re.IGNORECASE)
+                    is_dimension      = re.match(r'\d+[xX]\d+', text)
+                    is_float_value    = re.match(r'^\d+\.\d+$', text)
+                    is_keyword        = text_lower in ["staging", "roof", "column"]
+                    
+                    if not (is_column_or_wall or is_dimension or is_float_value or is_keyword):
                         continue
                         
                     # Cell bbox center as reference point
@@ -908,27 +920,38 @@ class DHMoTNode(LogicalKnowledgeNode):
             })
 
         axioms = []
+        PAGE_WIDTH = 1275
+        PAGE_HEIGHT = 1650
+        MIN_AREA_PX = 100.0
+        
         for geom in geometry.geometries:
             coords = geom.coordinates
-            x1 = coords.get("x1", 0)
-            y1 = coords.get("y1", 0)
-            x2 = coords.get("x2", 0)
-            y2 = coords.get("y2", 0)
             
-            # Task 2: Mathematical Calibration
-            # Truncate normalized coordinates to exactly 4 decimal places
-            nx1 = round(x1 / 1275, 4)
-            ny1 = round(y1 / 1650, 4)
-            nx2 = round(x2 / 1275, 4)
-            ny2 = round(y2 / 1650, 4)
+            # Incoming SAM outputs are normalized [0.0 - 1.0]
+            nx1 = coords.get("x1", 0.0)
+            ny1 = coords.get("y1", 0.0)
+            nx2 = coords.get("x2", 0.0)
+            ny2 = coords.get("y2", 0.0)
             
-            # Retrieve true pixel dimensions for equations
-            w_px = (nx2 - nx1) * 1275
-            h_px = (ny2 - ny1) * 1650
+            # BUG 2 FIX: Drop absolute Nulls instantly
+            if nx1 == nx2 or ny1 == ny2:
+                continue
             
-            area_px = round(w_px * h_px, 1)
-            aspect_ratio = round(w_px / h_px, 2) if h_px > 0 else 0.0
-            perimeter_px = round(2 * (w_px + h_px), 1)
+            # BUG 3 FIX: Denormalize to true pixels for accurate math
+            x1_px = nx1 * PAGE_WIDTH
+            y1_px = ny1 * PAGE_HEIGHT
+            x2_px = nx2 * PAGE_WIDTH
+            y2_px = ny2 * PAGE_HEIGHT
+            
+            width = x2_px - x1_px
+            height = y2_px - y1_px
+            true_area = width * height
+            
+            # BUG 3 FIX (Part 2): Drop microscopic AI hallucinations
+            if true_area < MIN_AREA_PX:
+                continue
+                
+            aspect_ratio = width / height if height > 0 else 0.0
             
             # Task 3: Axiom Enhancements
             axioms.append({
@@ -936,11 +959,11 @@ class DHMoTNode(LogicalKnowledgeNode):
                 "ai_confidence": 0.95,
                 "is_legend_item": False,
                 "spatial_context": {
-                    "bounding_box": [nx1, ny1, nx2, ny2],
+                    "bounding_box": [round(nx1, 4), round(ny1, 4), round(nx2, 4), round(ny2, 4)],
                     "equations": {
-                        "area_px": area_px,
-                        "aspect_ratio": aspect_ratio,
-                        "perimeter_px": perimeter_px
+                        "area_px": round(true_area, 1),
+                        "aspect_ratio": round(aspect_ratio, 2),
+                        "perimeter_px": round(2 * (width + height), 1)
                     }
                 }
             })
