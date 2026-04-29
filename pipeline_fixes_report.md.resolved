@@ -1,0 +1,65 @@
+# CAD Pipeline Refactoring & Fixes Report
+
+This report recursively lists all the fixes carried out on the Hybrid Neuro-Symbolic CAD Compliance System, organized by their architectural phase and specific pipeline nodes.
+
+## Summary of Fixes by Node
+| Phase / Node | Total Fixes | Time Window (UTC) |
+| :--- | :--- | :--- |
+| **Global / Pipeline Architecture** | 4 Fixes | 07:34:45Z – 08:52:31Z |
+| **Node 1 (Triage)** | 2 Fixes | 06:05:53Z – 08:11:21Z |
+| **Node 2 (Layout)** | 3 Fixes | 06:45:08Z – 08:11:21Z |
+| **Node 4 (DHMoT)** | 2 Fixes | 08:08:01Z – 10:13:55Z |
+| **Total Pipeline Fixes** | **11 Fixes** | 06:05:53Z – 10:13:55Z |
+
+---
+
+## Detailed Fix Log by Node
+
+### Global / Pipeline Architecture (4 Fixes)
+These changes affected the core execution engine and cross-node utilities.
+
+1. **Refactoring CAD Compliance Pipeline (Dependency Injection & Coordinate Sync)**
+   - **Time:** 2026-04-28 07:34:45Z – 08:04:21Z
+   - **Description:** Implemented Dependency Injection in `PipelineExecutor` to remove hardcoded dependencies. Added `GlobalCoordinateSync` utility to normalize all spatial data to a 0.0–1.0 scale, preventing geometric drift across all nodes.
+2. **Enforcing Strict Audit Trail & Executor Fail-Fast**
+   - **Time:** 2026-04-28 08:08:01Z – 08:11:21Z
+   - **Description:** Modified `executor.py` to expose execution traces and remove generic exception catching. Removed "Last Known Good" (LKG) fallback placeholders to ensure the pipeline crashes immediately on failure instead of masking data loss.
+3. **Implementing Persistent Model Caching**
+   - **Time:** 2026-04-28 08:14:49Z – 08:20:33Z
+   - **Description:** Optimized Colab environment by symlinking large SAM model weights directly from Google Drive. Reduced pipeline initialization time from minutes to seconds by eliminating redundant downloads.
+4. **Fixing Triage Pipeline Execution Error**
+   - **Time:** 2026-04-28 08:33:10Z – 08:52:31Z
+   - **Description:** Resolved a critical `AttributeError` caused by a signature change in the pipeline's `execute` method. Updated all references across the codebase to properly unpack the new `(NodeOutput, PipelineJournal)` return tuple.
+
+### Node 1: Triage Node (2 Fixes)
+These changes improved initial document processing, PDF conversion, and mask generation.
+
+1. **Fixing Mask Resolution Alignment**
+   - **Time:** 2026-04-28 06:05:53Z – 06:24:26Z
+   - **Description:** Resolved a silent shape-mismatch error. Updated `_segment_page` to capture original image dimensions and applied `cv2.INTER_NEAREST` interpolation to upscale SAM masks back to original PDF dimensions for perfect downstream pixel alignment.
+2. **Adding Node-Level Fail-Fast Guards**
+   - **Time:** 2026-04-28 08:08:01Z – 08:11:21Z
+   - **Description:** Implemented strict error handling and Fail-Fast guards for PDF conversion and file reads to ensure immediate system crash on data retrieval failure.
+
+### Node 2: Layout Intelligence Node (3 Fixes)
+These changes overhauled text extraction, OCR processing, and document intelligence.
+
+1. **Native OCR Data Pipeline Refactoring**
+   - **Time:** 2026-04-28 06:45:08Z – 06:48:30Z
+   - **Description:** Refactored to enable native DocTR execution directly on the original source PDF pixels instead of processed masks. Established coordinate mapping between PDF and mask scales.
+2. **Establishing Virtual Tags Table**
+   - **Time:** 2026-04-28 06:45:08Z – 06:48:30Z
+   - **Description:** Introduced a 'Virtual Tags Table' to capture un-gridded text directly from the native OCR pass, ensuring that text is properly linked downstream in DHMoT.
+3. **Adding Node-Level Fail-Fast Guards**
+   - **Time:** 2026-04-28 08:08:01Z – 08:11:21Z
+   - **Description:** Implemented Fail-Fast guards for OCR processing failures and empty output checks to prevent the pipeline from silently propagating empty masks.
+
+### Node 4: DHMoT Node (Domain Heuristics & Modalities Translation) (2 Fixes)
+These changes addressed validation schema mismatches and final heuristics.
+
+1. **Adding Node-Level Fail-Fast Guards**
+   - **Time:** 2026-04-28 08:08:01Z – 08:11:21Z
+   - **Description:** Implemented strict error handling to validate `geometry` and `tables` inputs, ensuring the node crashes immediately if expected upstream data is missing.
+2. **Fixing Validation Schema Access Error**
+   - **Time:** 2026-04-28 09:13:28Z – 10:13:55Z
+   - **Description:** Resolved a critical `AttributeError` by moving the `geometry_id` field into the `ValidationResult.details` dictionary. Updated downstream references (`_perform_rescan`, `_generate_validation_overlay`, etc.) to maintain pipeline stability and adhere to the existing schema.
